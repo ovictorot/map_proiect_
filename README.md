@@ -1,13 +1,13 @@
-# [Titlul proiectului]
+# [Registru de împrumuturi]
 
 Proiect individual la disciplina Metode avansate de programare, anul universitar 2026-2027.
 
 ## Autor
 
-- **Nume:** [Nume Prenume]
-- **Grupa:** [grupa]
-- **Marca:** [marca]
-- **Tema:** [numarul temei] - [titlul temei]
+- **Nume:** [Otean Victor]
+- **Grupa:** [2.1]
+- **Marca:** [LH715740]
+- **Tema:** [6] - [Registru de împrumuturi]
 
 ## Descriere
 
