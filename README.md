@@ -11,7 +11,7 @@ Proiect individual la disciplina Metode avansate de programare, anul universitar
 
 ## Descriere
 
-[Doua-trei propozitii despre ce face aplicatia si ce problema rezolva.]
+[Vom face o biblioteca]
 
 ## Tehnologii
 
