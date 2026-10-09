@@ -11,7 +11,7 @@ Proiect individual la disciplina Metode avansate de programare, anul universitar
 
 ## Descriere
 
-Serviciu web RESTful pentru evidența cărților și a împrumuturilor dintr-o bibliotecă, dezvoltat conform cerințelor temei 6.
+Serviciu web  pentru evidența cărților și a împrumuturilor dintr-o bibliotecă, dezvoltat conform cerințelor temei 6.
 
 ## Tehnologii
 
