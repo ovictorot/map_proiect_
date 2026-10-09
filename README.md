@@ -1,17 +1,17 @@
-# [Registru de împrumuturi]
+# Registru de împrumuturi
 
 Proiect individual la disciplina Metode avansate de programare, anul universitar 2026-2027.
 
 ## Autor
 
-- **Nume:** [Otean Victor]
-- **Grupa:** [2.1]
-- **Marca:** [LH715740]
-- **Tema:** [6] - [Registru de împrumuturi]
+- **Nume:** Otean Victor
+- **Grupa:** 2.1
+- **Marca:** LH715740
+- **Tema:** 6 - Registru de împrumuturi
 
 ## Descriere
 
-[Vom face o biblioteca]
+Serviciu web RESTful pentru evidența cărților și a împrumuturilor dintr-o bibliotecă, dezvoltat conform cerințelor temei 6.
 
 ## Tehnologii
 
