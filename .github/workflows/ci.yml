@@ -36,11 +36,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute valid Docker image tag
+        id: image_name
+        run: |
+          CLEAN_REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]*$//')
+          echo "tag=ghcr.io/$CLEAN_REPO:latest" >> $GITHUB_OUTPUT
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.image_name.outputs.tag }}
           build-args: |
             COMMIT=${{ github.sha }}
             BUILT_AT=${{ github.event.repository.updated_at }}
