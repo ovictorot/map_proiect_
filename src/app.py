@@ -298,4 +298,20 @@ def not_found(_):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    port_env = os.getenv("PORT")
+    if port_env:
+        port = int(port_env)
+    else:
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("0.0.0.0", 8080))
+                port = 8080
+        except OSError:
+            port = 5000
+            print(
+                f"[INFO] Port 8080 is reserved or occupied on this machine. "
+                f"Starting local dev server on http://localhost:{port}"
+            )
+
+    app.run(host="0.0.0.0", port=port)
