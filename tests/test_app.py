@@ -271,3 +271,214 @@ def test_reset_clears_books_and_resets_ids(client):
     res = client.post("/books", json=payload)
     assert res.status_code == 201
     assert res.get_json()["id"] == 1
+
+
+# --- /loans and /loans/{id}/return ---
+
+def test_full_loan_workflow_from_assignment(client):
+    # 1. create book with 1 copy
+    book_res = client.post(
+        "/books",
+        json={
+            "title": "Structuri de date",
+            "author": "N. Wirth",
+            "isbn": "9780130220059",
+            "copies": 1,
+        },
+    )
+    assert book_res.status_code == 201
+    assert book_res.get_json()["available_copies"] == 1
+
+    # 2. borrow the book: due_date must be 2026-10-15 (2026-10-01 + 14 days)
+    loan_res = client.post(
+        "/loans",
+        json={
+            "book_id": 1,
+            "borrower": "Ana Pop",
+            "loan_date": "2026-10-01",
+        },
+    )
+    assert loan_res.status_code == 201
+    loan = loan_res.get_json()
+    assert loan["id"] == 1
+    assert loan["due_date"] == "2026-10-15"
+    assert loan["return_date"] is None
+    assert loan["days_overdue"] == 0
+
+    # Book available copies is now 0
+    books = client.get("/books").get_json()
+    assert books[0]["available_copies"] == 0
+
+    # 3. second loan fails with 409 because available_copies is 0
+    second_loan_res = client.post(
+        "/loans",
+        json={
+            "book_id": 1,
+            "borrower": "Ion Popescu",
+            "loan_date": "2026-10-02",
+        },
+    )
+    assert second_loan_res.status_code == 409
+    assert second_loan_res.get_json()["error"] == "conflict"
+
+    # 4. return exactly on due date: days_overdue must be 0, not 1
+    ret_res = client.post("/loans/1/return", json={"return_date": "2026-10-15"})
+    assert ret_res.status_code == 200
+    ret_body = ret_res.get_json()
+    assert ret_body["return_date"] == "2026-10-15"
+    assert ret_body["days_overdue"] == 0
+
+    # Book available copies is back to 1
+    books = client.get("/books").get_json()
+    assert books[0]["available_copies"] == 1
+
+    # 5. second return on same loan returns 409
+    second_ret_res = client.post("/loans/1/return", json={"return_date": "2026-10-16"})
+    assert second_ret_res.status_code == 409
+    assert second_ret_res.get_json()["error"] == "conflict"
+
+
+def test_loan_return_overdue_calculation(client):
+    client.post(
+        "/books",
+        json={"title": "Python 101", "author": "Guido", "isbn": "9781234567890", "copies": 1},
+    )
+    client.post(
+        "/loans",
+        json={"book_id": 1, "borrower": "Alice", "loan_date": "2026-10-01"},
+    )
+    # due date is 2026-10-15; return on 2026-10-18 -> 3 days overdue
+    ret = client.post("/loans/1/return", json={"return_date": "2026-10-18"})
+    assert ret.status_code == 200
+    assert ret.get_json()["days_overdue"] == 3
+
+
+def test_create_loan_validation_errors(client):
+    # Book not found
+    res = client.post(
+        "/loans",
+        json={"book_id": 999, "borrower": "Bob", "loan_date": "2026-10-01"},
+    )
+    assert res.status_code == 404
+    assert res.get_json()["error"] == "not_found"
+
+    # Invalid book_id type
+    res = client.post(
+        "/loans",
+        json={"book_id": "not_an_int", "borrower": "Bob", "loan_date": "2026-10-01"},
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "validation"
+
+    # Missing / empty borrower
+    client.post(
+        "/books",
+        json={"title": "Book", "author": "A", "isbn": "9781111111111", "copies": 1},
+    )
+    res = client.post(
+        "/loans",
+        json={"book_id": 1, "borrower": "   ", "loan_date": "2026-10-01"},
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "validation"
+
+    # Invalid date format
+    res = client.post(
+        "/loans",
+        json={"book_id": 1, "borrower": "Bob", "loan_date": "01-10-2026"},
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "validation"
+
+    # Non-string date
+    res = client.post(
+        "/loans",
+        json={"book_id": 1, "borrower": "Bob", "loan_date": 12345},
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "validation"
+
+    # Invalid calendar numbers (month 99)
+    res = client.post(
+        "/loans",
+        json={"book_id": 1, "borrower": "Bob", "loan_date": "2026-99-99"},
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "validation"
+
+    # Non-dict JSON
+    res = client.post("/loans", data="invalid", content_type="application/json")
+    assert res.status_code == 400
+
+
+def test_return_loan_validation_errors(client):
+    # Loan not found
+    res = client.post("/loans/999/return", json={"return_date": "2026-10-15"})
+    assert res.status_code == 404
+    assert res.get_json()["error"] == "not_found"
+
+    client.post(
+        "/books",
+        json={"title": "Book", "author": "A", "isbn": "9781111111111", "copies": 1},
+    )
+    client.post(
+        "/loans",
+        json={"book_id": 1, "borrower": "Bob", "loan_date": "2026-10-05"},
+    )
+
+    # Return date earlier than loan date
+    res = client.post("/loans/1/return", json={"return_date": "2026-10-01"})
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "validation"
+
+    # Invalid date format
+    res = client.post("/loans/1/return", json={"return_date": "invalid-date"})
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "validation"
+
+    # Invalid body
+    res = client.post("/loans/1/return", data="bad", content_type="application/json")
+    assert res.status_code == 400
+
+
+def test_list_loans_filters_and_as_of(client):
+    client.post(
+        "/books",
+        json={"title": "Book 1", "author": "A", "isbn": "9781111111111", "copies": 5},
+    )
+    # Loan 1: active, loan_date 2026-10-01 -> due_date 2026-10-15
+    client.post("/loans", json={"book_id": 1, "borrower": "User 1", "loan_date": "2026-10-01"})
+    # Loan 2: returned, loan_date 2026-10-01 -> returned 2026-10-10
+    client.post("/loans", json={"book_id": 1, "borrower": "User 2", "loan_date": "2026-10-01"})
+    client.post("/loans/2/return", json={"return_date": "2026-10-10"})
+
+    # Filter active=true
+    active_loans = client.get("/loans?active=true").get_json()
+    assert len(active_loans) == 1
+    assert active_loans[0]["id"] == 1
+
+    # Filter active=false
+    closed_loans = client.get("/loans?active=false").get_json()
+    assert len(closed_loans) == 1
+    assert closed_loans[0]["id"] == 2
+
+    # Check as_of on active loan:
+    # On 2026-10-15 (due date) -> overdue=false (0 days overdue)
+    res_due = client.get("/loans?as_of=2026-10-15&active=true").get_json()
+    assert res_due[0]["days_overdue"] == 0
+
+    # On 2026-10-17 -> overdue=true (2 days overdue)
+    res_late = client.get("/loans?as_of=2026-10-17&overdue=true").get_json()
+    assert len(res_late) == 1
+    assert res_late[0]["id"] == 1
+    assert res_late[0]["days_overdue"] == 2
+
+    # On 2026-10-17 with overdue=false -> only Loan 2 (which was returned without delay)
+    res_not_late = client.get("/loans?as_of=2026-10-17&overdue=false").get_json()
+    assert len(res_not_late) == 1
+    assert res_not_late[0]["id"] == 2
+
+    # Invalid query parameters return 400
+    assert client.get("/loans?active=not_bool").status_code == 400
+    assert client.get("/loans?overdue=not_bool").status_code == 400
+    assert client.get("/loans?as_of=bad-date").status_code == 400

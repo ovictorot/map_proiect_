@@ -4,6 +4,7 @@ Implements only the common contract: /health, /version, / and /reset.
 Add the routes required by your assigned theme in this file or in separate modules.
 """
 
+import datetime
 import os
 import time
 
@@ -16,6 +17,19 @@ LOAN_PERIOD_DAYS = 14
 STARTED_AT = time.monotonic()
 
 app = Flask(__name__)
+
+
+def parse_iso_date(value: object) -> datetime.date | None:
+    """Validate and parse a date strictly in YYYY-MM-DD format."""
+    if not isinstance(value, str):
+        return None
+    val = value.strip()
+    if len(val) != 10 or val[4] != "-" or val[7] != "-":
+        return None
+    try:
+        return datetime.date.fromisoformat(val)
+    except ValueError:
+        return None
 
 
 class Store:
@@ -49,6 +63,28 @@ class Store:
             "isbn": book["isbn"],
             "copies": book["copies"],
             "available_copies": max(0, book["copies"] - active_loans),
+        }
+
+    def get_loan_representation(
+        self, loan: dict, as_of_date: datetime.date | None = None
+    ) -> dict:
+        due_date = datetime.date.fromisoformat(loan["due_date"])
+        if loan["return_date"] is not None:
+            days_overdue = loan["days_overdue"]
+        elif as_of_date is not None:
+            diff = (as_of_date - due_date).days
+            days_overdue = max(0, diff)
+        else:
+            days_overdue = 0
+
+        return {
+            "id": loan["id"],
+            "book_id": loan["book_id"],
+            "borrower": loan["borrower"],
+            "loan_date": loan["loan_date"],
+            "due_date": loan["due_date"],
+            "return_date": loan["return_date"],
+            "days_overdue": days_overdue,
         }
 
 
@@ -138,6 +174,122 @@ def list_books():
     books = [store.get_book_representation(book) for book in store.books.values()]
     books.sort(key=lambda b: (b["title"], b["id"]))
     return jsonify(books), 200
+
+
+@app.post("/loans")
+def create_loan():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="validation", message="Request body must be a JSON object"), 400
+
+    book_id = data.get("book_id")
+    borrower = data.get("borrower")
+    loan_date_str = data.get("loan_date")
+
+    if type(book_id) is not int:
+        return jsonify(error="validation", message="Field 'book_id' must be an integer"), 400
+
+    if book_id not in store.books:
+        return jsonify(error="not_found", message="Book not found"), 404
+
+    book = store.books[book_id]
+    book_rep = store.get_book_representation(book)
+    if book_rep["available_copies"] <= 0:
+        return jsonify(error="conflict", message="No available copies for this book"), 409
+
+    if not isinstance(borrower, str) or not borrower.strip():
+        return jsonify(error="validation", message="Field 'borrower' is required and must be non-empty"), 400
+
+    loan_date_obj = parse_iso_date(loan_date_str)
+    if loan_date_obj is None:
+        return jsonify(error="validation", message="Field 'loan_date' must be in YYYY-MM-DD format"), 400
+
+    due_date_obj = loan_date_obj + datetime.timedelta(days=LOAN_PERIOD_DAYS)
+
+    loan = {
+        "id": store.next_loan_id,
+        "book_id": book_id,
+        "borrower": borrower.strip(),
+        "loan_date": loan_date_obj.isoformat(),
+        "due_date": due_date_obj.isoformat(),
+        "return_date": None,
+        "days_overdue": 0,
+    }
+    store.loans[loan["id"]] = loan
+    store.next_loan_id += 1
+
+    return jsonify(store.get_loan_representation(loan)), 201
+
+
+@app.post("/loans/<int:loan_id>/return")
+def return_loan(loan_id: int):
+    if loan_id not in store.loans:
+        return jsonify(error="not_found", message="Loan not found"), 404
+
+    loan = store.loans[loan_id]
+    if loan["return_date"] is not None:
+        return jsonify(error="conflict", message="Loan has already been returned"), 409
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="validation", message="Request body must be a JSON object"), 400
+
+    return_date_str = data.get("return_date")
+    ret_date_obj = parse_iso_date(return_date_str)
+    if ret_date_obj is None:
+        return jsonify(error="validation", message="Field 'return_date' must be in YYYY-MM-DD format"), 400
+
+    loan_date_obj = datetime.date.fromisoformat(loan["loan_date"])
+    if ret_date_obj < loan_date_obj:
+        return jsonify(error="validation", message="return_date cannot be earlier than loan_date"), 400
+
+    due_date_obj = datetime.date.fromisoformat(loan["due_date"])
+    days_diff = (ret_date_obj - due_date_obj).days
+    days_overdue = max(0, days_diff)
+
+    loan["return_date"] = ret_date_obj.isoformat()
+    loan["days_overdue"] = days_overdue
+
+    return jsonify(store.get_loan_representation(loan)), 200
+
+
+@app.get("/loans")
+def list_loans():
+    active_param = request.args.get("active")
+    if active_param is not None and active_param.lower() not in ("true", "false"):
+        return jsonify(error="validation", message="Parameter 'active' must be 'true' or 'false'"), 400
+
+    as_of_param = request.args.get("as_of")
+    as_of_date = None
+    if as_of_param is not None:
+        as_of_date = parse_iso_date(as_of_param)
+        if as_of_date is None:
+            return jsonify(error="validation", message="Parameter 'as_of' must be in YYYY-MM-DD format"), 400
+
+    overdue_param = request.args.get("overdue")
+    if overdue_param is not None and overdue_param.lower() not in ("true", "false"):
+        return jsonify(error="validation", message="Parameter 'overdue' must be 'true' or 'false'"), 400
+
+    results = []
+    for loan in store.loans.values():
+        loan_rep = store.get_loan_representation(loan, as_of_date=as_of_date)
+        is_active = (loan["return_date"] is None)
+        is_overdue = (loan_rep["days_overdue"] > 0)
+
+        if active_param is not None:
+            expected_active = (active_param.lower() == "true")
+            if is_active != expected_active:
+                continue
+
+        if overdue_param is not None:
+            expected_overdue = (overdue_param.lower() == "true")
+            if is_overdue != expected_overdue:
+                continue
+
+        results.append(loan_rep)
+
+    results.sort(key=lambda l: l["id"])
+    return jsonify(results), 200
 
 
 @app.errorhandler(404)
