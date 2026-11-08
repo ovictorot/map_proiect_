@@ -292,6 +292,56 @@ def list_loans():
     return jsonify(results), 200
 
 
+@app.get("/admin/stats")
+def admin_stats():
+    expected_user = os.getenv("ADMIN_USER")
+    expected_password = os.getenv("ADMIN_PASSWORD")
+
+    # Credentials must be configured via environment variables and cannot be empty
+    if not expected_user or not expected_password:
+        return (
+            jsonify(error="unauthorized", message="Admin credentials are not configured"),
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Area"'},
+        )
+
+    auth = request.authorization
+    if not auth or auth.username != expected_user or auth.password != expected_password:
+        return (
+            jsonify(error="unauthorized", message="Invalid or missing credentials"),
+            401,
+            {"WWW-Authenticate": 'Basic realm="Admin Area"'},
+        )
+
+    total_books = len(store.books)
+    total_copies = sum(book["copies"] for book in store.books.values())
+    available_copies = sum(
+        store.get_book_representation(book)["available_copies"]
+        for book in store.books.values()
+    )
+    total_loans = len(store.loans)
+    active_loans = sum(
+        1 for loan in store.loans.values() if loan["return_date"] is None
+    )
+    returned_loans = sum(
+        1 for loan in store.loans.values() if loan["return_date"] is not None
+    )
+    overdue_loans = sum(
+        1 for loan in store.loans.values()
+        if loan["return_date"] is not None and loan["days_overdue"] > 0
+    )
+
+    return jsonify(
+        total_books=total_books,
+        total_copies=total_copies,
+        available_copies=available_copies,
+        total_loans=total_loans,
+        active_loans=active_loans,
+        returned_loans=returned_loans,
+        overdue_loans=overdue_loans,
+    ), 200
+
+
 @app.errorhandler(404)
 def not_found(_):
     return jsonify(error="not_found", message="route does not exist"), 404

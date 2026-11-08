@@ -53,6 +53,15 @@ python -m pytest --cov=src
 | `/loans` | POST | Inregistreaza un imprumut nou |
 | `/loans/{id}/return` | POST | Returneaza un imprumut |
 | `/loans` | GET | Lista imprumuturilor (filtrare: active, restante) |
+| `/admin/stats` | GET | Extensie: Statistici globale protejate prin HTTP Basic Auth (`ADMIN_USER`, `ADMIN_PASSWORD`) |
+
+## Extensii implementate
+
+- **Extensia 2 - Rută administrativă protejată (`/admin/stats`)**:
+  - Autentificare securizată prin standardul HTTP Basic.
+  - Credențialele sunt preluate dinamic din variabilele de mediu `ADMIN_USER` și `ADMIN_PASSWORD` (fără valori stocate în cod).
+  - Returnează codul `401 Unauthorized` cu antet `WWW-Authenticate` și mesaj standardizat JSON în cazul lipsei sau invalidității credențialelor.
+  - Returnează statistici agregate în format JSON: număr total de cărți, total exemplare, exemplare disponibile, total împrumuturi, împrumuturi active, împrumuturi returnate și împrumuturi returnate cu întârziere.
 
 ## Decizii de implementare
 

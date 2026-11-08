@@ -482,3 +482,84 @@ def test_list_loans_filters_and_as_of(client):
     assert client.get("/loans?active=not_bool").status_code == 400
     assert client.get("/loans?overdue=not_bool").status_code == 400
     assert client.get("/loans?as_of=bad-date").status_code == 400
+
+
+# --- Extensia 2: /admin/stats ---
+
+def test_admin_stats_unauthorized_when_env_not_configured(client, monkeypatch):
+    monkeypatch.delenv("ADMIN_USER", raising=False)
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    response = client.get("/admin/stats")
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "unauthorized"
+
+
+def test_admin_stats_unauthorized_when_credentials_missing(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_USER", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret123")
+    response = client.get("/admin/stats")
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "unauthorized"
+
+
+def test_admin_stats_unauthorized_when_credentials_wrong(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_USER", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret123")
+    # Wrong password
+    response = client.get("/admin/stats", auth=("admin", "wrong_pass"))
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "unauthorized"
+
+    # Wrong user
+    response = client.get("/admin/stats", auth=("hacker", "secret123"))
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "unauthorized"
+
+
+def test_admin_stats_success_empty_store(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_USER", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret123")
+    response = client.get("/admin/stats", auth=("admin", "secret123"))
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["total_books"] == 0
+    assert body["total_copies"] == 0
+    assert body["available_copies"] == 0
+    assert body["total_loans"] == 0
+    assert body["active_loans"] == 0
+    assert body["returned_loans"] == 0
+    assert body["overdue_loans"] == 0
+
+
+def test_admin_stats_calculates_all_metrics_correctly(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_USER", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "secret123")
+
+    # Add 2 books: Book 1 has 3 copies, Book 2 has 2 copies (total copies = 5)
+    client.post("/books", json={"title": "B1", "author": "A", "isbn": "1111111111111", "copies": 3})
+    client.post("/books", json={"title": "B2", "author": "A", "isbn": "2222222222222", "copies": 2})
+
+    # Loan 1: Book 1 borrowed, remains active
+    client.post("/loans", json={"book_id": 1, "borrower": "Alice", "loan_date": "2026-10-01"})
+
+    # Loan 2: Book 1 borrowed, returned on time (due 2026-10-15, ret 2026-10-15 -> days_overdue = 0)
+    client.post("/loans", json={"book_id": 1, "borrower": "Bob", "loan_date": "2026-10-01"})
+    client.post("/loans/2/return", json={"return_date": "2026-10-15"})
+
+    # Loan 3: Book 2 borrowed, returned late (due 2026-10-15, ret 2026-10-18 -> days_overdue = 3)
+    client.post("/loans", json={"book_id": 2, "borrower": "Charlie", "loan_date": "2026-10-01"})
+    client.post("/loans/3/return", json={"return_date": "2026-10-18"})
+
+    # Fetch stats
+    response = client.get("/admin/stats", auth=("admin", "secret123"))
+    assert response.status_code == 200
+    stats = response.get_json()
+
+    assert stats["total_books"] == 2
+    assert stats["total_copies"] == 5
+    # Active loans = 1 (on Book 1), so available_copies = 5 - 1 = 4
+    assert stats["available_copies"] == 4
+    assert stats["total_loans"] == 3
+    assert stats["active_loans"] == 1
+    assert stats["returned_loans"] == 2
+    assert stats["overdue_loans"] == 1
