@@ -563,3 +563,71 @@ def test_admin_stats_calculates_all_metrics_correctly(client, monkeypatch):
     assert stats["active_loans"] == 1
     assert stats["returned_loans"] == 2
     assert stats["overdue_loans"] == 1
+
+
+# --- Extensia 1: S3 / Cloudflare R2 Persistence ---
+
+def test_s3_disabled_when_env_missing():
+    from src.app import Store
+    fresh_store = Store()
+    assert fresh_store.save_to_s3() is False
+    assert fresh_store.load_from_s3() is False
+
+
+def test_s3_persistence_full_lifecycle(monkeypatch):
+    import io
+    from unittest.mock import MagicMock
+    from src.app import Store, app
+
+    # Simulated S3 bucket storage
+    s3_storage = {}
+
+    mock_client = MagicMock()
+
+    def mock_put_object(Bucket, Key, Body, ContentType):
+        s3_storage[f"{Bucket}/{Key}"] = Body
+        return {"ResponseMetadata": {"HTTPStatusCode": 200}}
+
+    def mock_get_object(Bucket, Key):
+        path = f"{Bucket}/{Key}"
+        if path not in s3_storage:
+            raise Exception("NoSuchKey")
+        return {"Body": io.BytesIO(s3_storage[path])}
+
+    mock_client.put_object.side_effect = mock_put_object
+    mock_client.get_object.side_effect = mock_get_object
+
+    monkeypatch.setenv("S3_ENDPOINT", "https://mock.r2.cloudflarestorage.com")
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setenv("S3_ACCESS_KEY", "access123")
+    monkeypatch.setenv("S3_SECRET_KEY", "secret456")
+
+    import boto3
+    monkeypatch.setattr(boto3, "client", lambda *args, **kwargs: mock_client)
+
+    app.config["TESTING"] = True
+    with app.test_client() as test_client:
+        # Create book and loan via API
+        test_client.post(
+            "/books",
+            json={"title": "Cloudflare R2 Guide", "author": "Cloud Author", "isbn": "9783333333333", "copies": 2},
+        )
+        test_client.post(
+            "/loans",
+            json={"book_id": 1, "borrower": "Dana", "loan_date": "2026-11-01"},
+        )
+
+        # Verify S3 received the data
+        assert "test-bucket/data.json" in s3_storage
+
+        # Now simulate a container restart by initializing a new Store instance
+        restarted_store = Store()
+
+        # The new store must have restored the book and loan from S3!
+        assert len(restarted_store.books) == 1
+        assert restarted_store.books[1]["title"] == "Cloudflare R2 Guide"
+        assert restarted_store.books[1]["isbn"] == "9783333333333"
+        assert len(restarted_store.loans) == 1
+        assert restarted_store.loans[1]["borrower"] == "Dana"
+        assert restarted_store.next_book_id == 2
+        assert restarted_store.next_loan_id == 2

@@ -57,6 +57,12 @@ python -m pytest --cov=src
 
 ## Extensii implementate
 
+- **Extensia 1 - Persistență în Cloudflare R2 / depozit compatibil S3**:
+  - Salvarea automată a stării aplicației la fiecare modificare (`POST /books`, `POST /loans`, `POST /loans/{id}/return`, `POST /reset`).
+  - Reîncărcarea automată a datelor la pornirea containerului (`Store.load_from_s3()`), prevenind pierderea stării la restart.
+  - Configurare dinamică exclusiv prin variabilele de mediu standardizate: `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` (fără credențiale hardcodate în cod sau comise în Git).
+  - Folosește biblioteca universală `boto3` compatibilă cu orice serviciu S3 standard.
+
 - **Extensia 2 - Rută administrativă protejată (`/admin/stats`)**:
   - Autentificare securizată prin standardul HTTP Basic.
   - Credențialele sunt preluate dinamic din variabilele de mediu `ADMIN_USER` și `ADMIN_PASSWORD` (fără valori stocate în cod).

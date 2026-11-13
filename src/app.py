@@ -5,6 +5,7 @@ Add the routes required by your assigned theme in this file or in separate modul
 """
 
 import datetime
+import json
 import os
 import time
 
@@ -32,21 +33,93 @@ def parse_iso_date(value: object) -> datetime.date | None:
         return None
 
 
-class Store:
-    """Holds the application data in memory.
+def get_s3_client():
+    """Retrieve an S3-compatible client for Cloudflare R2 if configured via environment variables."""
+    endpoint = os.getenv("S3_ENDPOINT")
+    bucket = os.getenv("S3_BUCKET")
+    access_key = os.getenv("S3_ACCESS_KEY")
+    secret_key = os.getenv("S3_SECRET_KEY")
 
-    Everything is lost when the container restarts.
-    """
+    if not (endpoint and bucket and access_key and secret_key):
+        return None, None
+
+    try:
+        import boto3
+        from botocore.config import Config
+
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
+            config=Config(signature_version="s3v4"),
+        )
+        return client, bucket
+    except Exception as e:
+        app.logger.warning(f"Failed to initialize S3 client: {e}")
+        return None, None
+
+
+class Store:
+    """Holds the application data in memory, optionally backed by S3 / Cloudflare R2."""
 
     def __init__(self) -> None:
-        self.reset()
-
-    def reset(self) -> None:
         self.next_id = 1
         self.next_book_id = 1
         self.next_loan_id = 1
         self.books: dict[int, dict] = {}
         self.loans: dict[int, dict] = {}
+        self.load_from_s3()
+
+    def reset(self) -> None:
+        self.next_id = 1
+        self.next_book_id = 1
+        self.next_loan_id = 1
+        self.books.clear()
+        self.loans.clear()
+        self.save_to_s3()
+
+    def save_to_s3(self) -> bool:
+        s3, bucket = get_s3_client()
+        if not s3 or not bucket:
+            return False
+        payload = {
+            "next_id": self.next_id,
+            "next_book_id": self.next_book_id,
+            "next_loan_id": self.next_loan_id,
+            "books": self.books,
+            "loans": self.loans,
+        }
+        try:
+            s3.put_object(
+                Bucket=bucket,
+                Key="data.json",
+                Body=json.dumps(payload).encode("utf-8"),
+                ContentType="application/json",
+            )
+            return True
+        except Exception as e:
+            app.logger.warning(f"Failed to persist state to S3: {e}")
+            return False
+
+    def load_from_s3(self) -> bool:
+        s3, bucket = get_s3_client()
+        if not s3 or not bucket:
+            return False
+        try:
+            resp = s3.get_object(Bucket=bucket, Key="data.json")
+            data = json.loads(resp["Body"].read().decode("utf-8"))
+            self.next_id = data.get("next_id", 1)
+            self.next_book_id = data.get("next_book_id", 1)
+            self.next_loan_id = data.get("next_loan_id", 1)
+            raw_books = data.get("books", {})
+            self.books = {int(k): v for k, v in raw_books.items()}
+            raw_loans = data.get("loans", {})
+            self.loans = {int(k): v for k, v in raw_loans.items()}
+            return True
+        except Exception as e:
+            app.logger.warning(f"Failed to load state from S3: {e}")
+            return False
 
     def get_active_loans_count(self, book_id: int) -> int:
         return sum(
@@ -165,6 +238,7 @@ def create_book():
     }
     store.books[book["id"]] = book
     store.next_book_id += 1
+    store.save_to_s3()
 
     return jsonify(store.get_book_representation(book)), 201
 
@@ -217,6 +291,7 @@ def create_loan():
     }
     store.loans[loan["id"]] = loan
     store.next_loan_id += 1
+    store.save_to_s3()
 
     return jsonify(store.get_loan_representation(loan)), 201
 
@@ -249,6 +324,7 @@ def return_loan(loan_id: int):
 
     loan["return_date"] = ret_date_obj.isoformat()
     loan["days_overdue"] = days_overdue
+    store.save_to_s3()
 
     return jsonify(store.get_loan_representation(loan)), 200
 
